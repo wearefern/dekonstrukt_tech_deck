@@ -19,7 +19,7 @@
     "react-dom": "latest"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest"
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.19"
   }
 }
