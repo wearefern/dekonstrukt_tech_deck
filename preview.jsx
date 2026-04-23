@@ -301,7 +301,7 @@ const mindMapData = {
           id: "artist-overview",
           title: "Overview",
           description:
-            "A central place for artists to upload tracks in formats like WAV, MP3, and FLAC, schedule releases, and manage detailed profiles with bios and social links.",
+            "A central place for artists to manage artist content, schedule releases, and manage detailed profiles with bios and social links.",
           type: "detail",
           children: [],
         },
@@ -309,7 +309,7 @@ const mindMapData = {
           id: "music-upload-release-scheduling",
           title: "Music Upload & Release Scheduling",
           description:
-            "Artists can upload tracks and plan release timing in advance for organized publishing.",
+            "Authorized roles can upload tracks and plan release timing in advance for organized publishing.",
           type: "capability",
           children: [],
         },
@@ -1150,14 +1150,15 @@ const nodeSpecOverrides = {
     category: "core",
     priority: "High",
     sectionRef: "4.3 Artist Content Management Module",
-    actors: ["Artist", "Admin", "System"],
+    actors: ["Artist", "Admin","Moderator", "System"],
     features: [
-      "Upload WAV, MP3, or FLAC tracks with title, genre, tags, cover art, and descriptions.",
-      "Create and maintain artist profiles with bios, links, media, branding, and verification state.",
-      "Schedule releases, publish exclusive content, manage DJ sets, and assign collaborator revenue shares.",
+      "Authorized roles can upload tracks WAV, MP3, or FLAC tracks with title, genre, tags, cover art, and descriptions.",
+      "Artists can maintain artist profiles with bios, links, media, branding, and verification state.",
+      "Admins can create artist profiles with bios, links, media, branding, and verification state.",
+      "Moderators can schedule releases, publish exclusive content, manage DJ sets, and assign collaborator revenue shares.",
       "Expose performance analytics so artists can understand audience and content traction.",
     ],
-    useCases: ["Upload track", "Edit track metadata", "Schedule release", "Add collaborators", "Assign revenue share"],
+    useCases: ["Upload track", "Edit track metadata", "Schedule release", "Add collaborators", "Assign revenue share", "Manage artist profile", "View content analytics"],
     entities: ["Artist", "Track", "RevenueSplit", "AnalyticsRecord", "Playlist"],
     integrations: ["File storage", "Revenue dashboard"],
     businessRules: [
@@ -1254,11 +1255,15 @@ const nodeSpecOverrides = {
       "Normalize Stripe and PayHere provider events into centralized revenue and transaction records.",
     ],
     useCases: ["Purchase premium plan", "Process payment", "View centralized revenue", "Manage subscriptions"],
-    entities: ["Subscription", "SubscriptionPlan", "PaymentTransaction", "RevenueSplit", "Order"],
+    entities: ["Subscription","SubscriptionPlan","PaymentTransaction","RevenueSplit","Order","OrderItem","RefundRecord"],
     integrations: ["Stripe", "PayHere", "Webhook/callback validation"],
     businessRules: [
-      "Every payment callback must be validated before access or revenue records are created.",
-      "Failed, duplicate, refunded, or mismatched provider events must not grant entitlement.",
+      "Every payment callback/webhook must be validated before processing",
+      "Duplicate callbacks must not create duplicate transactions",
+      "Signature/checksum validation must succeed before granting access",
+      "All transactions must be stored in a normalized internal format",
+      "Refunds must revoke entitlements",
+      "Original and normalized currency values must be stored"
     ],
     diagramIds: ["payment-revenue-flow", "payment-sequence", "marketplace-purchase-flow", "core-class-model"],
   },
@@ -1407,7 +1412,8 @@ const nodeSpecOverrides = {
     diagramIds: ["monthly-report-flow", "core-class-model", "system-subsystems"],
   },
   "music-upload-release-scheduling": {
-    useCases: ["Upload track", "Edit track metadata", "Schedule release"],
+    actors: ["Artist", "Admin", "Moderator"],
+    useCases: ["Upload track(Authorized roles only)", "Edit track metadata", "Schedule release"],
     entities: ["Track", "Artist", "RevenueSplit"],
     diagramIds: ["artist-upload-flow", "core-class-model"],
   },
@@ -1441,12 +1447,12 @@ const diagramCatalog = [
   User --> UCMarket["Browse Marketplace"]
   User --> UCDiscord["Connect Discord"]
   Artist["Artist"] --> UCArtist["Manage Artist Profile"]
-  Artist --> UCUpload["Upload and Schedule Tracks"]
   Artist --> UCPublish["Publish Marketplace Product"]
   Moderator["Moderator"] --> UCReports["Review Reports"]
   Moderator --> UCReviews["Moderate Product Reviews"]
   Moderator --> UCMonthly["Generate Monthly Report"]
-  Admin["Admin"] --> UCRoles["Manage Roles and Artists"]
+  Admin[Admin] --> UCRoles["Manage Roles and Artists"]
+  Admin --> UCUpload["Upload and Schedule Tracks"]
   Admin --> UCRevenue["View Revenue and Analytics"]
   Admin --> UCSystem["Monitor System"]
   Stripe["Stripe"] --> UCPay
@@ -1479,7 +1485,7 @@ const diagramCatalog = [
     title: "Artist Track Upload and Release Flow",
     summary: "Track file, metadata, release scheduling, collaborator, and revenue split path.",
     chart: `flowchart TD
-  A["Artist opens dashboard"] --> B["Upload audio file"]
+  A["Authorized role opens dashboard"] --> B["Upload audio file"]
   B --> C["Add title, genre, tags, cover art, and description"]
   C --> D{"Valid format and metadata?"}
   D -->|No| E["Show validation errors"]
@@ -1712,19 +1718,21 @@ const diagramCatalog = [
   class Artist {
     +String artistName
     +String verificationStatus
-    +uploadTrack()
-    +scheduleRelease()
-    +viewAnalytics()
+ 
   }
   class Admin {
     +createArtistProfile()
     +assignRole()
     +monitorSystem()
+    +uploadTrack()
+    +scheduleRelease()
+    +viewAnalytics()
   }
   class Moderator {
     +reviewReport()
     +removeContent()
     +escalateCase()
+    +scheduleRelease()
   }
   class Track {
     +String trackId
