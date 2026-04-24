@@ -2144,6 +2144,8 @@ const diagramCatalog = [
   },
 ];
 
+const DIAGRAM_STORAGE_KEY = "dekonstrukt-edited-diagrams-v1";
+
 const diagramTabs = [
   { type: "use-case", label: "Use Case" },
   { type: "flow", label: "Flow" },
@@ -2577,8 +2579,8 @@ function getSpecStats(root) {
   };
 }
 
-function getVisibleDiagramsForNode(type, node, showAll = false) {
-  const tabDiagrams = diagramCatalog.filter((diagram) => diagram.type === type);
+function getVisibleDiagramsForNode(type, node, showAll = false, sourceCatalog = diagramCatalog) {
+  const tabDiagrams = sourceCatalog.filter((diagram) => diagram.type === type);
   if (showAll) return tabDiagrams;
   const relatedIds = new Set(node?.diagramIds || []);
   const relatedDiagrams = tabDiagrams.filter((diagram) => relatedIds.has(diagram.id));
@@ -3118,6 +3120,61 @@ function InfoPanel({
   );
 }
 
+function configureMermaid() {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "loose",
+    theme: "dark",
+    themeVariables: {
+      background: "transparent",
+      primaryColor: "#0f172a",
+      primaryTextColor: "#e2e8f0",
+      primaryBorderColor: "#38bdf8",
+      lineColor: "#94a3b8",
+      secondaryColor: "#111827",
+      tertiaryColor: "#172033",
+      actorBkg: "#0f172a",
+      actorBorder: "#38bdf8",
+      actorTextColor: "#e2e8f0",
+      noteBkgColor: "#1e293b",
+      noteTextColor: "#e2e8f0",
+    },
+  });
+}
+
+function getDiagramForm(diagram) {
+  return {
+    title: diagram?.title || "",
+    summary: diagram?.summary || "",
+    chart: diagram?.chart || "",
+  };
+}
+
+function readStoredDiagramEdits() {
+  if (typeof window === "undefined") return {};
+  try {
+    const stored = window.localStorage.getItem(DIAGRAM_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredDiagramEdits(edits) {
+  if (typeof window === "undefined") return;
+  if (Object.keys(edits).length) {
+    window.localStorage.setItem(DIAGRAM_STORAGE_KEY, JSON.stringify(edits));
+    return;
+  }
+  window.localStorage.removeItem(DIAGRAM_STORAGE_KEY);
+}
+
+async function validateDiagramChart(chart) {
+  configureMermaid();
+  const validationId = `mermaid-validation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  await mermaid.render(validationId, chart);
+}
+
 function MermaidDiagram({ chart }) {
   const renderId = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
   const [svg, setSvg] = useState("");
@@ -3126,25 +3183,7 @@ function MermaidDiagram({ chart }) {
   useEffect(() => {
     let isMounted = true;
 
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: "loose",
-      theme: "dark",
-      themeVariables: {
-        background: "transparent",
-        primaryColor: "#0f172a",
-        primaryTextColor: "#e2e8f0",
-        primaryBorderColor: "#38bdf8",
-        lineColor: "#94a3b8",
-        secondaryColor: "#111827",
-        tertiaryColor: "#172033",
-        actorBkg: "#0f172a",
-        actorBorder: "#38bdf8",
-        actorTextColor: "#e2e8f0",
-        noteBkgColor: "#1e293b",
-        noteTextColor: "#e2e8f0",
-      },
-    });
+    configureMermaid();
 
     setError("");
     mermaid
@@ -3187,15 +3226,101 @@ function DiagramWorkspace({
   onSelectDiagram,
 }) {
   const [copiedId, setCopiedId] = useState(null);
-  const visibleDiagrams = getVisibleDiagramsForNode(activeType, selectedNode, showAllDiagrams);
+  const [isEditingDiagram, setIsEditingDiagram] = useState(false);
+  const [diagramForm, setDiagramForm] = useState(getDiagramForm(null));
+  const [diagramEditError, setDiagramEditError] = useState("");
+  const [editedDiagrams, setEditedDiagrams] = useState(readStoredDiagramEdits);
+  const diagramCatalogWithEdits = useMemo(
+    () =>
+      diagramCatalog.map((diagram) => ({
+        ...diagram,
+        ...editedDiagrams[diagram.id],
+      })),
+    [editedDiagrams],
+  );
+  const visibleDiagrams = getVisibleDiagramsForNode(
+    activeType,
+    selectedNode,
+    showAllDiagrams,
+    diagramCatalogWithEdits,
+  );
   const activeDiagram =
     visibleDiagrams.find((diagram) => diagram.id === activeDiagramId) || visibleDiagrams[0];
+  const originalActiveDiagram = diagramCatalog.find((diagram) => diagram.id === activeDiagram?.id);
+  const displayedDiagram = isEditingDiagram
+    ? { ...activeDiagram, ...diagramForm }
+    : activeDiagram;
   const relatedIds = new Set(selectedNode?.diagramIds || []);
+
+  useEffect(() => {
+    setDiagramForm(getDiagramForm(activeDiagram));
+    setDiagramEditError("");
+    setIsEditingDiagram(false);
+  }, [activeDiagram?.id]);
+
+  const updateDiagramForm = (field, value) => {
+    setDiagramForm((current) => ({ ...current, [field]: value }));
+    setDiagramEditError("");
+  };
+
+  const persistDiagramEdits = (nextEdits) => {
+    setEditedDiagrams(nextEdits);
+    writeStoredDiagramEdits(nextEdits);
+  };
+
+  const saveDiagramEdit = async () => {
+    if (!activeDiagram) return;
+    const nextDiagram = {
+      title: diagramForm.title.trim() || activeDiagram.title,
+      summary: diagramForm.summary.trim(),
+      chart: diagramForm.chart,
+    };
+
+    try {
+      await validateDiagramChart(nextDiagram.chart);
+    } catch (renderError) {
+      setDiagramEditError(renderError?.message || "Mermaid syntax is invalid. Fix the diagram code before saving.");
+      return;
+    }
+
+    const nextEdits = { ...editedDiagrams };
+    const matchesOriginal =
+      originalActiveDiagram &&
+      nextDiagram.title === originalActiveDiagram.title &&
+      nextDiagram.summary === originalActiveDiagram.summary &&
+      nextDiagram.chart === originalActiveDiagram.chart;
+
+    if (matchesOriginal) {
+      delete nextEdits[activeDiagram.id];
+    } else {
+      nextEdits[activeDiagram.id] = nextDiagram;
+    }
+
+    persistDiagramEdits(nextEdits);
+    setDiagramForm(nextDiagram);
+    setIsEditingDiagram(false);
+    setDiagramEditError("");
+  };
+
+  const resetDiagramEdit = () => {
+    if (!activeDiagram || !originalActiveDiagram) return;
+    const nextEdits = { ...editedDiagrams };
+    delete nextEdits[activeDiagram.id];
+    persistDiagramEdits(nextEdits);
+    setDiagramForm(getDiagramForm(originalActiveDiagram));
+    setDiagramEditError("");
+  };
+
+  const cancelDiagramEdit = () => {
+    setDiagramForm(getDiagramForm(activeDiagram));
+    setDiagramEditError("");
+    setIsEditingDiagram(false);
+  };
 
   const copyMermaid = async () => {
     if (!activeDiagram) return;
     try {
-      await navigator.clipboard.writeText(activeDiagram.chart);
+      await navigator.clipboard.writeText(displayedDiagram.chart);
       setCopiedId(activeDiagram.id);
       window.setTimeout(() => setCopiedId(null), 1400);
     } catch {
@@ -3237,12 +3362,31 @@ function DiagramWorkspace({
         >
           {copiedId === activeDiagram?.id ? "Copied" : "Copy Mermaid"}
         </button>
+        <button
+          type="button"
+          className="glass-button"
+          style={isEditingDiagram ? styles.iconTextButton : styles.iconTextButtonMuted}
+          onClick={() => {
+            setDiagramForm(getDiagramForm(activeDiagram));
+            setDiagramEditError("");
+            setIsEditingDiagram((current) => !current);
+          }}
+          disabled={!activeDiagram}
+        >
+          <EditRounded style={styles.actionIcon} />
+          {isEditingDiagram ? "Editing Mode: ON" : "Edit Diagram"}
+        </button>
       </div>
 
       <div style={styles.diagramTabs} role="tablist" aria-label="Diagram types">
         {diagramTabs.map((tab) => {
           const isActive = tab.type === activeType;
-          const count = getVisibleDiagramsForNode(tab.type, selectedNode, showAllDiagrams).length;
+          const count = getVisibleDiagramsForNode(
+            tab.type,
+            selectedNode,
+            showAllDiagrams,
+            diagramCatalogWithEdits,
+          ).length;
           return (
             <button
               type="button"
@@ -3302,23 +3446,75 @@ function DiagramWorkspace({
         </div>
 
         <div style={styles.diagramPreview}>
-          {activeDiagram ? (
+          {displayedDiagram ? (
             <>
               <div style={styles.diagramPreviewHeader}>
                 <div>
-                  <h3 style={styles.diagramPreviewTitle}>{activeDiagram.title}</h3>
-                  <p style={styles.diagramPreviewSummary}>{activeDiagram.summary}</p>
+                  <h3 style={styles.diagramPreviewTitle}>{displayedDiagram.title}</h3>
+                  <p style={styles.diagramPreviewSummary}>{displayedDiagram.summary}</p>
                   <div style={styles.diagramTagRow}>
-                    {getDiagramTags(activeDiagram).map((tag) => (
-                      <span key={`${activeDiagram.id}-${tag}`} style={styles.diagramTag}>
+                    {getDiagramTags(displayedDiagram).map((tag) => (
+                      <span key={`${displayedDiagram.id}-${tag}`} style={styles.diagramTag}>
                         {tag}
                       </span>
                     ))}
                   </div>
                 </div>
-                <span style={styles.typeBadge}>{activeDiagram.type}</span>
+                <span style={styles.typeBadge}>{displayedDiagram.type}</span>
               </div>
-              <MermaidDiagram chart={activeDiagram.chart} />
+              {isEditingDiagram && (
+                <div style={styles.diagramEditPanel}>
+                  <div style={styles.editorHeader}>
+                    <div>
+                      <div style={styles.editorKicker}>Editing mode</div>
+                      <div style={styles.editorTitle}>Update diagram metadata and Mermaid code</div>
+                    </div>
+                    <div style={styles.editorActions}>
+                      <button type="button" className="glass-button" style={styles.iconTextButton} onClick={saveDiagramEdit}>
+                        <SaveRounded style={styles.actionIcon} />
+                        Save
+                      </button>
+                      <button type="button" className="glass-button" style={styles.iconTextButtonMuted} onClick={resetDiagramEdit}>
+                        <RestartAltRounded style={styles.actionIcon} />
+                        Reset
+                      </button>
+                      <button type="button" className="glass-button" style={styles.iconTextButtonMuted} onClick={cancelDiagramEdit}>
+                        <CloseRounded style={styles.actionIcon} />
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                  <label style={styles.fieldLabel}>
+                    Title
+                    <input
+                      value={diagramForm.title}
+                      onChange={(event) => updateDiagramForm("title", event.target.value)}
+                      style={styles.editorInput}
+                    />
+                  </label>
+                  <label style={styles.fieldLabel}>
+                    Summary
+                    <textarea
+                      value={diagramForm.summary}
+                      onChange={(event) => updateDiagramForm("summary", event.target.value)}
+                      rows={3}
+                      style={styles.editorTextarea}
+                    />
+                  </label>
+                  <label style={styles.fieldLabel}>
+                    Mermaid code
+                    <textarea
+                      value={diagramForm.chart}
+                      onChange={(event) => updateDiagramForm("chart", event.target.value)}
+                      rows={16}
+                      spellCheck={false}
+                      style={styles.diagramCodeTextarea}
+                    />
+                  </label>
+                  {diagramEditError && <pre style={styles.diagramError}>{diagramEditError}</pre>}
+                </div>
+              )}
+              <MermaidDiagram chart={displayedDiagram.chart} />
             </>
           ) : (
             <div style={styles.emptyDiagramState}>Select another tab to inspect available diagrams.</div>
@@ -4626,6 +4822,29 @@ const styles = {
     fontSize: 13,
     lineHeight: 1.5,
     margin: 0,
+  },
+
+  diagramEditPanel: {
+    border: "1px solid rgba(45, 212, 191, 0.24)",
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 14,
+    background: "rgba(15, 23, 42, 0.62)",
+  },
+
+  diagramCodeTextarea: {
+    width: "100%",
+    minHeight: 320,
+    resize: "vertical",
+    borderRadius: 8,
+    border: "1px solid rgba(148, 163, 184, 0.24)",
+    background: "rgba(2, 6, 23, 0.72)",
+    color: "#e2e8f0",
+    padding: "10px",
+    outline: "none",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontSize: 12,
+    lineHeight: 1.5,
   },
 
   mermaidRender: {
